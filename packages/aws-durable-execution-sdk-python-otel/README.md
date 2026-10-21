@@ -468,9 +468,7 @@ The service
 omits descendants of completed contexts unless their ancestors retain children
 through `ReplayChildren`; an `UpdatedOperationIds` entry alone does not provide
 missing operation metadata. The SDK does not synthesize a hook or a span from
-that missing record. Public input-delivery tests use a real large child result
-to retain metadata, while still asserting one saved-step execution and terminal
-export with the correct parent in each view.
+that missing record.
 
 Known completed context metadata is retained from the full visible input
 snapshot for descendant completions delivered by later checkpoint responses.

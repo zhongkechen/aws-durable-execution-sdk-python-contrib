@@ -21,9 +21,6 @@ from aws_durable_execution_sdk_python_testing.checkpoint.transformer import (
     CheckpointRequestDispatcher,
 )
 from aws_durable_execution_sdk_python_testing.clock import RealClock
-from aws_durable_execution_sdk_python_testing.operation_state import (
-    prune_replay_children,
-)
 from aws_durable_execution_sdk_python_testing.exceptions import (
     InvalidParameterValueException,
 )
@@ -156,7 +153,7 @@ class CheckpointProcessor:
         token = CheckpointToken.from_str(checkpoint_token)
         execution = self._store.load(token.execution_arn)
         return StateOutput(
-            operations=prune_replay_children(execution.get_navigable_operations()),
+            operations=execution.get_navigable_operations(),
             next_marker=None,
         )
 

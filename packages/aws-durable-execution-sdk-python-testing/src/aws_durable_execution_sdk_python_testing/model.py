@@ -1,9 +1,6 @@
 """Model classes for the web API."""
 
 from __future__ import annotations
-from aws_durable_execution_sdk_python_testing.operation_state import (
-    operation_state_to_dict,
-)
 
 import datetime
 
@@ -575,7 +572,7 @@ class GetDurableExecutionStateResponse:
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
-            "Operations": [operation_state_to_dict(op) for op in self.operations]
+            "Operations": [op.to_dict() for op in self.operations]
         }
         if self.next_marker is not None:
             result["NextMarker"] = self.next_marker
@@ -680,8 +677,7 @@ class EventError:
     @classmethod
     def from_dict(cls, data: dict) -> EventError:
         payload = None
-        payload_data = data.get("Payload")
-        if payload_data is not None:
+        if payload_data := data.get("Payload"):
             payload = ErrorObject.from_dict(payload_data)
 
         return cls(
@@ -2243,14 +2239,6 @@ class Event:
         event_error: EventError | None = (
             EventError.from_details(callback_details) if callback_details else None
         )
-        if (
-            context.include_execution_data
-            and callback_details is not None
-            and callback_details.error is None
-        ):
-            # Detailed service history retains an empty Error.Payload object.
-            # This projection must not turn the SDK-facing absent error into one.
-            event_error = EventError(payload=ErrorObject.from_dict({}), truncated=False)
         return cls(
             event_type=EventType.CALLBACK_FAILED.value,
             event_timestamp=context.end_timestamp,
@@ -2604,11 +2592,6 @@ HISTORY_EVENT_TYPES: dict[str, HistoryEventTypeConfig] = {
 }
 
 
-def _operation_error(error: ErrorObject | None) -> ErrorObject | None:
-    # History retains present Payload={}, while SDK state treats Error={} as absent.
-    return error if error is not None and error.to_dict() else None
-
-
 def events_to_operations(events: list[Event]) -> list[Operation]:
     """Convert a list of history events into operations.
 
@@ -2761,7 +2744,7 @@ def events_to_operations(events: list[Event]) -> list[Operation]:
                 callback_details=CallbackDetails(
                     callback_id=callback_id,
                     result=result,
-                    error=_operation_error(error),
+                    error=error,
                 ),
             )
 
@@ -2802,7 +2785,7 @@ def events_to_operations(events: list[Event]) -> list[Operation]:
                 operation,
                 step_details=StepDetails(
                     result=result_val,
-                    error=_operation_error(error_val),
+                    error=error_val,
                     attempt=attempt,
                     next_attempt_timestamp=next_attempt_ts,
                 ),
@@ -2835,9 +2818,7 @@ def events_to_operations(events: list[Event]) -> list[Operation]:
                     operation,
                     context_details=ContextDetails(
                         result=None,
-                        error=_operation_error(
-                            event.context_failed_details.error.payload
-                        ),
+                        error=event.context_failed_details.error.payload,
                     ),
                 )
 
@@ -2862,9 +2843,7 @@ def events_to_operations(events: list[Event]) -> list[Operation]:
                     operation,
                     chained_invoke_details=ChainedInvokeDetails(
                         result=None,
-                        error=_operation_error(
-                            event.chained_invoke_failed_details.error.payload
-                        ),
+                        error=event.chained_invoke_failed_details.error.payload,
                     ),
                 )
 
@@ -3160,7 +3139,7 @@ class CheckpointUpdatedExecutionState:
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
-            "Operations": [operation_state_to_dict(op) for op in self.operations]
+            "Operations": [op.to_dict() for op in self.operations]
         }
         if self.next_marker is not None:
             result["NextMarker"] = self.next_marker

@@ -24,9 +24,6 @@ from aws_durable_execution_sdk_python.lambda_service import (
 )
 
 from aws_durable_execution_sdk_python_testing.clock import real_now
-from aws_durable_execution_sdk_python_testing.operation_state import (
-    prune_replay_children,
-)
 from aws_durable_execution_sdk_python_testing.exceptions import (
     IllegalStateException,
     InvalidParameterValueException,
@@ -482,11 +479,15 @@ class Execution:
         )
 
     def mark_state_delivered(self) -> None:
-        """Explicitly clear all pending operation IDs after their delivery.
+        """Reset the list of changed operations once an invocation's input
+        carries them.
 
-        The live executor uses versioned ``advance_handler_seen`` acknowledgments
-        so failed invocations retain their input updates and concurrent changes
-        newer than the acknowledged input snapshot remain pending.
+        The service reports, on each invocation, the operations that
+        changed after the last state the handler observed. The runner
+        delivers state in the invocation input. So the list is reset when
+        that input is built, not when the invocation completes: an
+        operation that completes while the handler is still running is
+        reported on the next invocation.
         """
         self.updated_operation_ids = []
 
@@ -691,7 +692,6 @@ class Execution:
                 end_timestamp=now if now is not None else real_now(),
                 callback_details=updated_callback_details,
             )
-            self._record_updated_operation(operation.operation_id)
             return self.operations[index]
 
     def complete_callback_failure(
@@ -708,11 +708,8 @@ class Execution:
             self.touch_operation(operation.operation_id)
             updated_callback_details = None
             if operation.callback_details:
-                # Match CallbackDetails.from_dict without depending on a store
-                # serialization round trip: an empty wire Error has no details.
                 updated_callback_details = replace(
-                    operation.callback_details,
-                    error=error if error is not None and error.to_dict() else None,
+                    operation.callback_details, error=error
                 )
 
             self.operations[index] = replace(
@@ -721,7 +718,6 @@ class Execution:
                 end_timestamp=now if now is not None else real_now(),
                 callback_details=updated_callback_details,
             )
-            self._record_updated_operation(operation.operation_id)
             return self.operations[index]
 
     def complete_callback_timeout(
@@ -748,7 +744,6 @@ class Execution:
                 end_timestamp=now if now is not None else real_now(),
                 callback_details=updated_callback_details,
             )
-            self._record_updated_operation(operation.operation_id)
             return self.operations[index]
 
     def complete_chained_invoke(
@@ -902,9 +897,10 @@ class OperationPaginatorState:
         ``max_size_bytes`` and, when given, ``max_items``. Second element
         of the tuple is a marker for the next page, or ``None`` when the
         page fits everything."""
-        operations = prune_replay_children(self.snapshot_operations)
-        start_idx = self._resolve_marker(marker, len(operations))
-        return self._walk_page(operations, start_idx, max_size_bytes, max_items)
+        start_idx = self._resolve_marker(marker)
+        return self._walk_page(
+            self.snapshot_operations, start_idx, max_size_bytes, max_items
+        )
 
     def unseen_operations(self) -> list[Operation]:
         """Operations whose ``operation_last_touched_seq`` is strictly
@@ -924,20 +920,11 @@ class OperationPaginatorState:
         ]
 
     def advance_handler_seen(self, seq: int) -> None:
-        """Acknowledge delivered updates without retreating the watermark.
-
-        Equal acknowledgments also consume old-format, unversioned update IDs.
-        Only versions covered by this delivery may be removed.
-        """
+        """Advance the wrapped execution's ``handler_seen_seq`` to
+        ``seq`` if that represents forward progress. Monotonic:
+        smaller or equal values are ignored."""
         if seq > self.execution.handler_seen_seq:
             self.execution.handler_seen_seq = seq
-        # A checkpoint response or completed invocation delivered this state.
-        # Retain changes newer than that acknowledged snapshot.
-        self.execution.updated_operation_ids = [
-            operation_id
-            for operation_id in self.execution.updated_operation_ids
-            if self.execution.operation_last_touched_seq.get(operation_id, 0) > seq
-        ]
 
     # --- internals -------------------------------------------------
 
@@ -966,21 +953,14 @@ class OperationPaginatorState:
         # floor at 1 to guarantee pagination always advances.
         return max(self.execution.operation_size_bytes.get(op.operation_id, 0), 1)
 
-    def _resolve_marker(
-        self, marker: str | None, operation_count: int | None = None
-    ) -> int:
+    def _resolve_marker(self, marker: str | None) -> int:
         if marker is None:
             return 0
         seq, idx = self._decode_marker(marker)
         if seq != self.pinned_token_sequence:
             msg = "Invalid marker"
             raise InvalidParameterValueException(msg)
-        count = (
-            len(self.snapshot_operations)
-            if operation_count is None
-            else operation_count
-        )
-        if idx < 0 or idx > count:
+        if idx < 0 or idx > len(self.snapshot_operations):
             msg = "Invalid marker"
             raise InvalidParameterValueException(msg)
         return idx
